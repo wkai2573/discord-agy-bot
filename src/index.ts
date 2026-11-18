@@ -14,6 +14,58 @@ function safeName(interaction: ChatInputCommandInteraction): string {
   return `discord-${interaction.user.id}-${Date.now()}`;
 }
 
+const outputRoot = path.resolve(process.cwd(), 'output');
+
+function localDateString(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+async function archiveGeneratedFiles(
+  files: string[],
+  interaction: ChatInputCommandInteraction,
+  prompt: string,
+): Promise<{ dateFolder: string; imageNames: string[] }> {
+  const createdAt = new Date();
+  const dateFolder = localDateString(createdAt);
+  const archiveDir = path.join(outputRoot, dateFolder);
+  await fs.mkdir(archiveDir, { recursive: true });
+
+  const requestId = `${createdAt.getTime()}-${interaction.user.id}`;
+  const imageNames: string[] = [];
+
+  for (let index = 0; index < files.length; index++) {
+    const source = files[index];
+    const extension = path.extname(source).toLowerCase() || '.png';
+    const stem = `${requestId}-${index + 1}`;
+    const imageName = `${stem}${extension}`;
+    const imagePath = path.join(archiveDir, imageName);
+
+    await fs.copyFile(source, imagePath);
+
+    await fs.writeFile(
+      path.join(archiveDir, `${stem}.json`),
+      `${JSON.stringify({
+        createdAt: createdAt.toISOString(),
+        date: dateFolder,
+        prompt,
+        image: imageName,
+        userId: interaction.user.id,
+        userName: interaction.user.username,
+        guildId: interaction.guildId,
+        channelId: interaction.channelId,
+      }, null, 2)}\n`,
+      'utf8',
+    );
+
+    imageNames.push(imageName);
+  }
+
+  return { dateFolder, imageNames };
+}
+
 async function handleImage(interaction: ChatInputCommandInteraction): Promise<void> {
   if (interaction.channelId !== config.imageChannelId) {
     await interaction.reply({
@@ -45,8 +97,14 @@ async function handleImage(interaction: ChatInputCommandInteraction): Promise<vo
         new AttachmentBuilder(file, { name: `generated-${index + 1}${path.extname(file)}` }),
       );
 
+      const archived = await archiveGeneratedFiles(result.files, interaction, prompt);
+
+      const archiveSummary = archived.imageNames
+        .map((name) => `- \`output/${archived.dateFolder}/${name}\``)
+        .join('\n');
+
       await interaction.editReply({
-        content: `由 <@${interaction.user.id}> 送出的生圖完成：`,
+        content: `由 <@${interaction.user.id}> 送出的生圖完成：\n已保存到本機：\n${archiveSummary}\n每張圖片旁另有 \`.json\` 提示詞記錄。`,
         files: attachments,
       });
     } catch (error) {
